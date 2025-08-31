@@ -1,7 +1,11 @@
 ﻿using CommandLine;
+using Microsoft.Extensions.Logging;
 using veeam_fold_sync.CliParser;
+using veeam_fold_sync.Logger;
 
-class Program
+namespace veeam_fold_sync;
+
+internal class Program
 {
     private static void Main(string[] args)
     {
@@ -18,7 +22,12 @@ class Program
 
     static void Run(Options options)
     {
-        Console.WriteLine("Hello world!");
+        // Setup logger
+        using var loggerFactory = FileLogger.SetupLogger(options.LogFile);
+        ILogger<Program> logger = loggerFactory.CreateLogger<Program>();
+        logger.Log(LogLevel.Information, "Logger initialized.");
+        
+        
     }
     
     private static void HandleErrors(IEnumerable<Error> errors)

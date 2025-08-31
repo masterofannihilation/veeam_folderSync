@@ -9,7 +9,12 @@
 
     <ItemGroup>
       <PackageReference Include="CommandLineParser" Version="2.9.1" />
-      <PackageReference Include="System.CommandLine" Version="2.0.0-beta7.25380.108" />
+      <PackageReference Include="Microsoft.Extensions.Logging" Version="9.0.8" />
+      <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="9.0.8" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <Folder Include="DataSync\" />
     </ItemGroup>
 
 </Project>

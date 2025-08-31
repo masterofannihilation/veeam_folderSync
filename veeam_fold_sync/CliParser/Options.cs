@@ -25,7 +25,6 @@ public class Options
 
         if (srcValid && repValid && logValid)
         {
-            Console.WriteLine("Folder paths and file path are valid");
             return true;
         }
 
