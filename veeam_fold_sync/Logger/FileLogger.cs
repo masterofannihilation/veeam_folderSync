@@ -20,7 +20,7 @@ public class FileLogger( StreamWriter logFileWriter) : ILogger
         return loggerFactory;
     }
 
-    public IDisposable BeginScope<TState>(TState state)
+    public IDisposable BeginScope<TState>(TState state) where TState : notnull
     {
         throw new NotImplementedException();
     }
@@ -35,8 +35,8 @@ public class FileLogger( StreamWriter logFileWriter) : ILogger
         LogLevel logLevel,
         EventId eventId,
         TState state,
-        Exception exception,
-        Func<TState, Exception, string> formatter)
+        Exception? exception,
+        Func<TState, Exception?, string> formatter)
     {
         // Ensure that only information level and higher logs are recorded
         if (!IsEnabled(logLevel))
