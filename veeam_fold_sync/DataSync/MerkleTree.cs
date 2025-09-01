@@ -6,9 +6,10 @@ public class MerkleTree(string rootPath, ILogger logger)
 {
     public Node Root { get; private set; } = new(rootPath, true);
 
-    public static void BuildTree(Node node)
+    public static async Task BuildTreeAsync(Node node)
     {
-        var folderEntries = Directory.GetFileSystemEntries(node.Path);
+        var folderEntries = Directory.GetFileSystemEntries(node.Address);
+        var buildTasks = new List<Task>();
         
         // Build Merkel Tree bottom-up recursively
         foreach (var folderEntry in folderEntries)
@@ -17,105 +18,81 @@ public class MerkleTree(string rootPath, ILogger logger)
             {
                 var childNode = new Node(folderEntry, isDirectory: true);
                 node.Children.Add(childNode);
-                BuildTree(childNode);
+                buildTasks.Add(BuildTreeAsync(childNode));
             }
             else if (File.Exists(folderEntry))
             {
                 var childNode = new Node(folderEntry, isDirectory: false);
                 // For files, calculate hash immediately
-                childNode.CalculateHash();
                 node.Children.Add(childNode);
+                buildTasks.Add(childNode.CalculateHashAsync());
             }
         }
+
+        await Task.WhenAll(buildTasks);
         
         if (node.IsDirectory)
         {
             // After processing all children, calculate directory hash
-            node.CalculateHash();
+            await node.CalculateHashAsync();
         }
     }
     
-    public void SyncTrees(Node source, Node replica)
+    public async Task SyncTreesAsync(Node source, Node replica)
     {
-        if (source.Hash == replica.Hash) return; // Nothing to do
-    
+        // If root hashes match, trees are identical
+        if (source.Hash == replica.Hash)
+        {
+            return;
+        }
+
         if (!source.IsDirectory) // File
         {
-            File.Copy(source.Path, replica.Path, true); // Overwrite
-            logger.Log(LogLevel.Information, "Updated file: {FilePath}", replica.Path);
+            await source.CopyToAsync(replica.Address, logger);
         }
         else // Directory
         {
+            var syncTasks = new List<Task>();
+            
             foreach (var sourceChild in source.Children)
             {
                 var replicaChild = replica.Children.FirstOrDefault(c => 
-                    Path.GetFileName(c.Path) == Path.GetFileName(sourceChild.Path));
+                    Path.GetFileName(c.Address) == Path.GetFileName(sourceChild.Address));
             
                 // If child doesn't exist in replica, copy it
                 if (replicaChild == null)
                 {
-                    CopyEntireNode(sourceChild, replica.Path);
+                    syncTasks.Add(CopyEntireNodeAsync(sourceChild, replica.Address));
                 }
                 else // If it exists, recursion
                 {
-                    SyncTrees(sourceChild, replicaChild);
+                    syncTasks.Add(SyncTreesAsync(sourceChild, replicaChild));
                 }
             }
-        
-            // Hashset of source filenames for fast lookup
-            var sourceNames = new HashSet<string>(source.Children.Select(c => Path.GetFileName(c.Path)));
             
+            await Task.WhenAll(syncTasks);
+
+            // Hashset of source filenames for fast lookup
+            var sourceNames = new HashSet<string>(source.Children.Select(c => Path.GetFileName(c.Address)));
             // Delete extra files or folders in replica that don't exist in source
-            foreach (var replicaChild in replica.Children)
-            {
-                if (!sourceNames.Contains(Path.GetFileName(replicaChild.Path)))
-                {
-                    DeleteNode(replicaChild);
-                }
-            }
+            var deleteTasks = replica.Children
+                .Where(replicaChild => !sourceNames.Contains(Path.GetFileName(replicaChild.Address)))
+                .Select(replicaChild => replicaChild.DeleteAsync(logger));
+            
+            await Task.WhenAll(deleteTasks);
         }
     }
 
     // Copies an entire node (file or directory) to the replica path
-    private void CopyEntireNode(Node sourceChild, string replicaPath)
+    private async Task CopyEntireNodeAsync(Node sourceChild, string replicaPath)
     {
-        if (sourceChild.IsDirectory)
-        {
-            var newDirPath = Path.Combine(replicaPath, Path.GetFileName(sourceChild.Path));
-            Directory.CreateDirectory(newDirPath);
-            logger.Log(LogLevel.Information, "Created directory: {DirectoryPath}", newDirPath);
-            
-            foreach (var child in sourceChild.Children)
-            {
-                CopyEntireNode(child, newDirPath);
-            }
-        }
-        else
-        {
-            var newFilePath = Path.Combine(replicaPath, Path.GetFileName(sourceChild.Path));
-            File.Copy(sourceChild.Path, newFilePath);
-            logger.Log(LogLevel.Information, "Copied file: {FilePath}", newFilePath);
-        }
-    }
-
-    // Deletes a file or directory (recursively)
-    private void DeleteNode(Node replicaChild)
-    {
-        if (replicaChild.IsDirectory)
-        {
-            Directory.Delete(replicaChild.Path, true);
-            logger.Log(LogLevel.Information, "Deleted directory: {DirectoryPath}", replicaChild.Path);
-        }
-        else
-        {
-            File.Delete(replicaChild.Path);
-            logger.Log(LogLevel.Information, "Deleted file: {FilePath}", replicaChild.Path);
-        }
+        var destPath = Path.Combine(replicaPath, Path.GetFileName(sourceChild.Address));
+        await sourceChild.CopyToAsync(destPath, logger);
     }
     
     public static void PrintTree(Node node, string indent = "")
     {
-        Console.WriteLine($"{indent}- {Path.GetFileName(node.Path)}");
+        Console.WriteLine($"{indent}- {Path.GetFileName(node.Address)}");
         foreach (var child in node.Children)
         {
             PrintTree(child, indent + "  ");
