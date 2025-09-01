@@ -11,9 +11,9 @@ public class Node(string address, bool isDirectory)
     public List<Node> Children { get; set; } = [];
     public bool IsDirectory { get; set; } = isDirectory;
     
-    public Task CalculateHashAsync()
+    public async Task CalculateHashAsync()
     {
-        if (IsDirectory) // If directory, hash is based on children's hashes
+        if (IsDirectory) // If a directory, hash is based on children's hashes
         {
             // Sort for consistency in case of enumerating in different orders
             var childHashes = Children.Select(child => child.Hash).OrderBy(h => h);
@@ -22,16 +22,32 @@ public class Node(string address, bool isDirectory)
             var hash = SHA256.HashData(bytes);
             Hash = Convert.ToHexStringLower(hash);
         }
-        else // If file, hash is based on file content
+        else // If a file, hash is based on file content
         {
-            // Console.WriteLine("Reading file for hash: " + Address);
-            var fileBytes = File.ReadAllBytes(Address);
-            var hash = SHA256.HashData(fileBytes);
-            Hash = Convert.ToHexStringLower(hash);
-            // Console.WriteLine("Calculated hash for file: " + Address);
-        }
+            // Use filestream to prevent loading entire file into memory, instead read in chunks
+            const int bufferSize = 4096 * 100; // 400KB
+            using (var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256))
+            await using (
+                var fileStream = new FileStream(
+                    Address, 
+                    FileMode.Open, 
+                    FileAccess.Read, 
+                    FileShare.Read, 
+                    bufferSize, 
+                    FileOptions.SequentialScan | FileOptions.Asynchronous))
+            {
+                var buffer = new byte[bufferSize];
+                int bytesRead;
 
-        return Task.CompletedTask;
+                while ((bytesRead = await fileStream.ReadAsync(buffer)) > 0)
+                {
+                    hasher.AppendData(buffer, 0, bytesRead);
+                }
+                var hash = hasher.GetHashAndReset();
+                Hash = Convert.ToHexStringLower(hash);
+            }
+            Console.WriteLine("Calculated hash for file: " + Address + " Hash: " + Hash);
+        }
     }
     
     public async Task CopyToAsync(string dstAddress, ILogger logger)
