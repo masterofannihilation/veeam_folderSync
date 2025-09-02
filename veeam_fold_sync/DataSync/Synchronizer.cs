@@ -7,7 +7,8 @@ public class Synchronizer(Options options, ILogger logger)
 {
     private readonly MerkleTree _sourceTree = new (options.SrcFolder);
     private readonly MerkleTree _replicaTree = new(options.RepFolder);
-    private readonly Watcher _watcher = new ();
+    private readonly Watcher _sourceWatcher = new ();
+    private readonly Watcher _replicaWatcher = new ();
 
     public async Task InitialSync(Options options)
     {
@@ -22,10 +23,14 @@ public class Synchronizer(Options options, ILogger logger)
         
         await Task.WhenAll(buildTasks);
 
-        _sourceTree.PrintTree(_sourceTree.Root);
+        // Console.WriteLine("\n Source tree");
+        // _sourceTree.PrintTree(_sourceTree.Root);
+        // Console.WriteLine("\n Replica tree");
+        // _replicaTree.PrintTree(_replicaTree.Root);
         
-        // Start watching source folder for changes
-        _ = Task.Run( () => _watcher.Watch(options.SrcFolder));
+        // Start watching source folder and replica folder for changes
+        _ = Task.Run( () => _sourceWatcher.Watch(options.SrcFolder));
+        _ = Task.Run( () => _replicaWatcher.Watch(options.RepFolder));
         
         // Initial folder synchronization
         await SyncTreesAsync(_sourceTree.Root, _replicaTree.Root);
@@ -33,53 +38,51 @@ public class Synchronizer(Options options, ILogger logger)
 
     public async Task PeriodicSync()
     {
-        await ProcessWatcherListAsync(_watcher.DeletedAddresses, _sourceTree.RemoveNodes);
-        await ProcessWatcherListAsync(_watcher.AddedAddresses, _sourceTree.AddNodes);
-        await ProcessWatcherListAsync(_watcher.UpdatedAddresses, _sourceTree.UpdateNodes);
+        await ProcessWatcherListAsync(_sourceWatcher.DeletedAddresses, _sourceTree.RemoveNodes);
+        await ProcessWatcherListAsync(_sourceWatcher.AddedAddresses, _sourceTree.AddNodes);
+        await ProcessWatcherListAsync(_sourceWatcher.UpdatedAddresses, _sourceTree.UpdateNodes);
 
-        _sourceTree.PrintTree(_sourceTree.Root);
-
+        await ProcessWatcherListAsync(_replicaWatcher.DeletedAddresses, _replicaTree.RemoveNodes);
+        await ProcessWatcherListAsync(_replicaWatcher.AddedAddresses, _replicaTree.AddNodes);
+        await ProcessWatcherListAsync(_replicaWatcher.UpdatedAddresses, _replicaTree.UpdateNodes);
+        
+        // Console.WriteLine("\n Source tree");
+        // _sourceTree.PrintTree(_sourceTree.Root);
+        // Console.WriteLine("\n Replica tree");
+        // _replicaTree.PrintTree(_replicaTree.Root);
+        
         // Sync source and replica trees
         await SyncTreesAsync(_sourceTree.Root, _replicaTree.Root);
     }
-    
-    private async Task ProcessWatcherListAsync(List<string> addresses, Func<List<string>, Task> processFunc)
+
+    private static async Task ProcessWatcherListAsync(List<string> addresses, Func<List<string>, Task> processFunc)
     {
         if (addresses.Count > 0)
         {
+            // PrintAddresses(addresses);
             await processFunc(addresses);
             addresses.Clear();
         }
     }
 
-    private void printAddresses(List<string> addresses)
-    {
-        foreach (var address in addresses)
-        {
-            Console.WriteLine("Processing: " + address);
-        }
-    }
-
     private async Task SyncTreesAsync(Node source, Node replica)
     {
-        Console.WriteLine("Comparing source: " + source.Address + " with replica: " + replica.Address);
         // If root hashes match, trees are identical
         if (source.Hash == replica.Hash) return;
 
         if (!source.IsDirectory) // File
         {
-            Console.WriteLine("Synchronizing file: " + source.Address);
-            await CopyToAsync(source, replica.Address);
+            await CopyFileAsync(source, replica.Address);
+
         }
         else // Directory
         {
-            Console.WriteLine("Synchronizing directory: " + source.Address);
-            await SynchronizeDirectory(source, replica);
+            await SynchronizeDirectoryAsync(source, replica);
             await DeleteExtraFiles(source, replica);
         }
     }
 
-    private async Task SynchronizeDirectory(Node source, Node replica)
+    private async Task SynchronizeDirectoryAsync(Node source, Node replica)
     {
         var syncTasks = new List<Task>();
 
@@ -106,18 +109,28 @@ public class Synchronizer(Options options, ILogger logger)
 
     private async Task DeleteExtraFiles(Node source, Node replica)
     {
-        Console.WriteLine("Deleting extra files in replica: " + replica.Address);
-        var sourceNames = new HashSet<string>(source.Children.Select(c => Path.GetFileName(c.Address)));
-        var replicaChildrenCopy = replica.Children.ToList();
-        var deleteTasks = replicaChildrenCopy
-            .Where(replicaChild => !sourceNames.Contains(Path.GetFileName(replicaChild.Address)))
-            .Select(child =>
+        // Identify extra entries based on filesystem addresses to avoid hash comparison (empty files don't influence hash)
+        var sourceEntries = new HashSet<string>( Directory.GetFileSystemEntries(source.Address).Select(Path.GetFileName)!);
+        var replicaEntries = Directory.GetFileSystemEntries(replica.Address);
+    
+        var extraEntries = replicaEntries
+            .Where(entry => !sourceEntries.Contains(Path.GetFileName(entry)))
+            .ToList();
+    
+        // Delete extra entries
+        foreach (var extra in extraEntries)
+        {
+            if (Directory.Exists(extra))
             {
-                Console.WriteLine($"Replica has extra '{child.Address}'. Deleting.");
-                return DeleteAsync(child);
-            });
-
-        await Task.WhenAll(deleteTasks);
+                await DeleteDirectoryAsync(_replicaTree.NodeLookup[NormalizePath(extra)]);
+                logger.Log(LogLevel.Information, "Deleted directory: {DirPath}", extra);
+            }
+            else if (File.Exists(extra))
+            {
+                File.Delete(extra);
+                logger.Log(LogLevel.Information, "Deleted file: {FilePath}", extra);
+            }
+        }
     }
 
     private async Task CopyToAsync(Node nodeToBeCopied, string dstAddress)
@@ -144,8 +157,7 @@ public class Synchronizer(Options options, ILogger logger)
         await destStream.FlushAsync();
         destStream.Close();
 
-        logger.Log(LogLevel.Information, "Copied file: {FilePath}", dstAddress);
-        await _replicaTree.AddNodes([dstAddress]);
+        logger.Log(LogLevel.Information, "Copied file: {FilePath}", nodeToBeCopied.Address + " to " + dstAddress);
     }
 
     private async Task CopyDirectoryAsync(Node nodeToBeCopied, string dstAddress)
@@ -162,8 +174,6 @@ public class Synchronizer(Options options, ILogger logger)
             var childDestPath = Path.Combine(dstAddress, Path.GetFileName(child.Address));
             await CopyToAsync(child, childDestPath);
         }
-        // Edit the replica tree
-        await _replicaTree.AddNodes([dstAddress]);
     }
 
     private async Task DeleteAsync(Node nodeToBeDeleted)
@@ -178,26 +188,36 @@ public class Synchronizer(Options options, ILogger logger)
         }
     }
 
-    private async Task DeleteFileAsync(Node nodeToBeDeleted)
+    private Task DeleteFileAsync(Node nodeToBeDeleted)
     {
         File.Delete(nodeToBeDeleted.Address);
-        await _replicaTree.RemoveNodes(new List<string> { nodeToBeDeleted.Address });
         logger.Log(LogLevel.Information, "Deleted file: {FilePath}", nodeToBeDeleted.Address);
+        return Task.CompletedTask;
     }
 
     private async Task DeleteDirectoryAsync(Node nodeToBeDeleted)
     {
-        // Delete children in parallel
-        var deleteTasks = nodeToBeDeleted.Children.Select(DeleteAsync);
-        await Task.WhenAll(deleteTasks);
-        // Delete the directory itself
+        // Make a copy of the children to avoid modifying the collection during iteration
+        var childrenCopy = nodeToBeDeleted.Children.ToList();
+        foreach (var child in childrenCopy)
+        {
+            await DeleteAsync(child);
+        }
         Directory.Delete(nodeToBeDeleted.Address);
-        await _replicaTree.RemoveNodes([nodeToBeDeleted.Address]);
         logger.Log(LogLevel.Information, "Deleted directory (recursively): {DirPath}", nodeToBeDeleted.Address);
     }
     
+    // Normalize path to ensure consistent representation, sometimes paths can have trailing slashes
     private static string NormalizePath(string path)
     {
         return Path.GetFullPath(path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+    }
+    
+    private static void PrintAddresses(List<string> addresses)
+    {
+        foreach (var address in addresses)
+        {
+            Console.WriteLine("Processing: " + address);
+        }
     }
 }

@@ -57,7 +57,6 @@ public class MerkleTree(string rootPath)
         // Loop through deleted addresses and remove corresponding nodes from source tree and lookup dictionary
         foreach (var address in deletedAddresses)
         {
-            Console.WriteLine($"Removing node: {address}");
             // Check if node exists in lookup dictionary
             if (!NodeLookup.TryGetValue(address, out var nodeToDelete)) continue;
             
@@ -65,10 +64,9 @@ public class MerkleTree(string rootPath)
             nodeToDelete.Parent?.Children.Remove(nodeToDelete);
             NodeLookup.Remove(NormalizePath(address));
             
-            // Mark parent node for hash update
+            // Rebuild tree from parent node upwards
             if (nodeToDelete.Parent != null)
             {
-                Console.WriteLine("Rebuilding tree from parent: " + nodeToDelete.Parent.Address);
                 await RebuildTreeAsync(nodeToDelete.Parent);
             }
         }
@@ -90,8 +88,6 @@ public class MerkleTree(string rootPath)
         {
             // Find parent node
             var parentAddress = Path.GetDirectoryName(address);
-            Console.WriteLine("Finding parent for: " + address + " Parent: " + parentAddress);
-            Console.WriteLine("adding node: " + address);
 
             // Ensure parent exists in the tree
             if (parentAddress != null && NodeLookup.TryGetValue(parentAddress, out var parentNode))
@@ -99,13 +95,11 @@ public class MerkleTree(string rootPath)
                 if (NodeLookup.TryGetValue(address, out var existingNode))
                 {
                     // Node already exists, just recalculate its hash
-                    Console.WriteLine("Node already exists: " + address + ". Recalculating hash.");
                     await RebuildTreeAsync(existingNode);
                     continue;
                 }
-                Console.WriteLine("Adding node: " + address);
                 var isDirectory = Directory.Exists(address);
-                var newNode = new Node(address, parentNode, isDirectory);
+                var newNode = new Node(NormalizePath(address), parentNode, isDirectory);
                 parentNode.Children.Add(newNode);
                 NodeLookup.Add(NormalizePath(address), newNode);
                 await RebuildTreeAsync(newNode);
@@ -120,7 +114,7 @@ public class MerkleTree(string rootPath)
 
     public void PrintTree(Node node, string indent = "")
     {
-        Console.WriteLine($"{indent}- {Path.GetFileName(node.Address)} ");
+        Console.WriteLine($"{indent}- {Path.GetFileName(node.Address) } (Hash: {node.Hash})");
         foreach (var child in node.Children)
         {
             PrintTree(child, indent + "  ");

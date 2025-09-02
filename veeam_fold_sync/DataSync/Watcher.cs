@@ -27,27 +27,23 @@ public class Watcher
 
     private void OnFileRenamed(object sender, RenamedEventArgs e)
     {
-        Console.WriteLine("File renamed from {0} to {1}", e.OldFullPath, e.FullPath);
         RenamedAddresses.Add(e.OldFullPath, e.FullPath);
     }
 
     private void OnFileCreated(object sender, FileSystemEventArgs e)
     {
-        Console.WriteLine("File added to {0}", e.FullPath);
         if (!AddedAddresses.Contains(e.FullPath))
             AddedAddresses.Add(e.FullPath);
     }
 
     private void OnFileDeleted(object sender, FileSystemEventArgs e)
     {
-        Console.WriteLine("File removed from {0}", e.FullPath);
         if (!DeletedAddresses.Contains(e.FullPath))
             DeletedAddresses.Add(e.FullPath);
     }
 
     private void OnFileChanged(object sender, FileSystemEventArgs e)
     {
-        Console.WriteLine("File changed at {0}", e.FullPath);
         if (!UpdatedAddresses.Contains(e.FullPath))
             UpdatedAddresses.Add(e.FullPath);
     }
