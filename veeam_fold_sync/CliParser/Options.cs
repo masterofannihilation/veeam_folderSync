@@ -23,15 +23,31 @@ public class Options
         bool repValid = Directory.Exists(RepFolder);
         bool logValid = File.Exists(LogFile);
 
-        if (srcValid && repValid && logValid)
+        if (!srcValid || !repValid || !logValid)
         {
-            return true;
+            Console.WriteLine("Folder path or file path nonexistent");
+            Console.WriteLine($"Source folder: {srcValid}");
+            Console.WriteLine($"Rep folder: {repValid}");
+            Console.WriteLine($"Log file: {logValid}");
+            return false;
         }
 
-        Console.WriteLine("Folder path or file path nonexistent");
-        Console.WriteLine($"Source folder: {srcValid}");
-        Console.WriteLine($"Rep folder: {repValid}");
-        Console.WriteLine($"Log file: {logValid}");
-        return false;
+        var srcFull = Path.GetFullPath(SrcFolder).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var repFull = Path.GetFullPath(RepFolder).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        
+        if (string.Equals(srcFull, repFull, StringComparison.OrdinalIgnoreCase))
+        {
+            Console.WriteLine("Source and replica folders must not be the same folder.");
+            return false;
+        }
+
+        if ((srcFull.Length > repFull.Length && srcFull.StartsWith(repFull + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) ||
+            (repFull.Length > srcFull.Length && repFull.StartsWith(srcFull + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)))
+        {
+            Console.WriteLine("Source and replica folders must not be subdirectories of one another.");
+            return false;
+        }
+
+        return true;
     }
 }
