@@ -27,5 +27,9 @@ dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=
 #### Run
 
 ```
-.\veeam_fold_sync\bin\Release\net9.0\win-x64\veeam_fold_sync.exe  -s "c:\path\to\folder\source\folder\" -r "c:\path\to\folder\replica\folder\" -i 15000 -l "c:\path\to\logfile\"
+.\veeam_fold_sync\bin\Release\net9.0\win-x64\veeam_fold_sync.exe
+-s "c:\path\to\folder\source\folder\"
+-r "c:\path\to\folder\replica\folder\"
+-i 15000
+-l "c:\path\to\logfile\"
 ```
