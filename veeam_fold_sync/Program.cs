@@ -19,35 +19,21 @@ internal class Program
                     using var loggerFactory = FileLogger.SetupLogger(options.LogFile);
                     var logger = loggerFactory.CreateLogger<Program>();
                     PrintInfo(options, logger);
+                    
+                    // Initial merkle tree build and synchronization
+                    var synchronizer = new Synchronizer(options, logger);
+                    await synchronizer.InitialSync(options);
 
-                    // Initial sync
-                    await Run(options, logger);
                     // Periodic sync
                     using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(options.SyncInterval));
                     while (await timer.WaitForNextTickAsync())
                     {
-                        await Run(options, logger);
+                        await synchronizer.PeriodicSync();
                     }
                 }
             });
     }
-
-    private static async Task Run(Options options, ILogger logger)
-    {
-        // Build merkle trees of source and replica folders
-        var buildTasks = new List<Task>();
-        var sourceTree = new MerkleTree(options.SrcFolder, logger);
-        buildTasks.Add(MerkleTree.BuildTreeAsync(sourceTree.Root));
     
-        var replicaTree = new MerkleTree(options.RepFolder, logger);
-        buildTasks.Add(MerkleTree.BuildTreeAsync(replicaTree.Root));
-        
-        await Task.WhenAll(buildTasks);
-    
-        //Synchronize folders
-        await sourceTree.SyncTreesAsync(sourceTree.Root, replicaTree.Root);
-    }
-
     private static void PrintInfo(Options options, ILogger logger)
     {
         logger.Log(LogLevel.Information, "Logger initialized.");
@@ -55,13 +41,5 @@ internal class Program
         logger.Log(LogLevel.Information, "Replica Folder: {RepFolder}", options.RepFolder);
         logger.Log(LogLevel.Information, "Log File: {LogFile}", options.LogFile);
         logger.Log(LogLevel.Information, "Synchronization interval: {interval} ms", options.SyncInterval);
-    }
-
-    private static void HandleErrors(IEnumerable<Error> errors)
-    {
-        foreach (var error in errors)
-        {
-            Console.WriteLine(error.ToString());
-        }
     }
 }

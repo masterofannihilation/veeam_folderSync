@@ -1,12 +1,12 @@
-﻿using Microsoft.Extensions.Logging;
+﻿namespace veeam_fold_sync.DataSync;
 
-namespace veeam_fold_sync.DataSync;
-
-public class MerkleTree(string rootPath, ILogger logger)
+public class MerkleTree(string rootPath)
 {
-    public Node Root { get; private set; } = new(rootPath, true);
-
-    public static async Task BuildTreeAsync(Node node)
+    public Node Root { get; private set; } = new(rootPath, null, true);
+    // Dictionary for fast node lookup by path when rebuilding tree
+    public Dictionary<string, Node> NodeLookup { get; } = new();
+    
+    public async Task BuildTreeAsync(Node node)
     {
         var folderEntries = Directory.GetFileSystemEntries(node.Address);
         var buildTasks = new List<Task>();
@@ -16,19 +16,22 @@ public class MerkleTree(string rootPath, ILogger logger)
         {
             if (Directory.Exists(folderEntry))
             {
-                var childNode = new Node(folderEntry, isDirectory: true);
+                var childNode = new Node(folderEntry, node, isDirectory: true);
                 node.Children.Add(childNode);
+                NodeLookup.Add(NormalizePath(folderEntry), childNode);
                 buildTasks.Add(BuildTreeAsync(childNode));
             }
             else if (File.Exists(folderEntry))
             {
-                var childNode = new Node(folderEntry, isDirectory: false);
+                var childNode = new Node(folderEntry, node, isDirectory: false);
+                NodeLookup.Add(NormalizePath(folderEntry), childNode);
                 // For files, calculate hash immediately
                 node.Children.Add(childNode);
                 buildTasks.Add(childNode.CalculateHashAsync());
             }
         }
 
+        // Wait for all child nodes to be processed
         await Task.WhenAll(buildTasks);
         
         if (node.IsDirectory)
@@ -37,62 +40,87 @@ public class MerkleTree(string rootPath, ILogger logger)
             await node.CalculateHashAsync();
         }
     }
-    
-    public async Task SyncTreesAsync(Node source, Node replica)
+
+    private async Task RebuildTreeAsync(Node node)
     {
-        // If root hashes match, trees are identical
-        if (source.Hash == replica.Hash)
+        // Recalculate hashes up to the root
+        while (node != null)
         {
-            return;
+            await node.CalculateHashAsync();
+            node = node.Parent!;
         }
 
-        if (!source.IsDirectory) // File
+    }
+    
+    public async Task RemoveNodes(List<string> deletedAddresses)
+    {
+        // Loop through deleted addresses and remove corresponding nodes from source tree and lookup dictionary
+        foreach (var address in deletedAddresses)
         {
-            await source.CopyToAsync(replica.Address, logger);
-        }
-        else // Directory
-        {
-            var syncTasks = new List<Task>();
+            Console.WriteLine($"Removing node: {address}");
+            // Check if node exists in lookup dictionary
+            if (!NodeLookup.TryGetValue(address, out var nodeToDelete)) continue;
             
-            foreach (var sourceChild in source.Children)
+            // Remove node from parent's children list and from lookup dictionary
+            nodeToDelete.Parent?.Children.Remove(nodeToDelete);
+            NodeLookup.Remove(NormalizePath(address));
+            
+            // Mark parent node for hash update
+            if (nodeToDelete.Parent != null)
             {
-                var replicaChild = replica.Children.FirstOrDefault(c => 
-                    Path.GetFileName(c.Address) == Path.GetFileName(sourceChild.Address));
-            
-                // If child doesn't exist in replica, copy it
-                if (replicaChild == null)
-                {
-                    syncTasks.Add(CopyEntireNodeAsync(sourceChild, replica.Address));
-                }
-                else // If it exists, recursion
-                {
-                    syncTasks.Add(SyncTreesAsync(sourceChild, replicaChild));
-                }
+                Console.WriteLine("Rebuilding tree from parent: " + nodeToDelete.Parent.Address);
+                await RebuildTreeAsync(nodeToDelete.Parent);
             }
-            
-            await Task.WhenAll(syncTasks);
-
-            // Hashset of source filenames for fast lookup
-            var sourceNames = new HashSet<string>(source.Children.Select(c => Path.GetFileName(c.Address)));
-            // Delete extra files or folders in replica that don't exist in source
-            var deleteTasks = replica.Children
-                .Where(replicaChild => !sourceNames.Contains(Path.GetFileName(replicaChild.Address)))
-                .Select(replicaChild => replicaChild.DeleteAsync(logger));
-            
-            await Task.WhenAll(deleteTasks);
         }
     }
-
-    // Copies an entire node (file or directory) to the replica path
-    private async Task CopyEntireNodeAsync(Node sourceChild, string replicaPath)
+    
+    public async Task UpdateNodes(List<string> updatedAddresses)
     {
-        var destPath = Path.Combine(replicaPath, Path.GetFileName(sourceChild.Address));
-        await sourceChild.CopyToAsync(destPath, logger);
+        // For each updated address, recalculate hash and propagate changes up the tree
+        foreach (var address in updatedAddresses)
+        {
+            var currentNode = NodeLookup[address];
+            await RebuildTreeAsync(currentNode);
+        }
     }
     
-    public static void PrintTree(Node node, string indent = "")
+    public async Task AddNodes(List<string> addedAddresses)
     {
-        Console.WriteLine($"{indent}- {Path.GetFileName(node.Address)}");
+        foreach (var address in addedAddresses)
+        {
+            // Find parent node
+            var parentAddress = Path.GetDirectoryName(address);
+            Console.WriteLine("Finding parent for: " + address + " Parent: " + parentAddress);
+            Console.WriteLine("adding node: " + address);
+
+            // Ensure parent exists in the tree
+            if (parentAddress != null && NodeLookup.TryGetValue(parentAddress, out var parentNode))
+            {
+                if (NodeLookup.TryGetValue(address, out var existingNode))
+                {
+                    // Node already exists, just recalculate its hash
+                    Console.WriteLine("Node already exists: " + address + ". Recalculating hash.");
+                    await RebuildTreeAsync(existingNode);
+                    continue;
+                }
+                Console.WriteLine("Adding node: " + address);
+                var isDirectory = Directory.Exists(address);
+                var newNode = new Node(address, parentNode, isDirectory);
+                parentNode.Children.Add(newNode);
+                NodeLookup.Add(NormalizePath(address), newNode);
+                await RebuildTreeAsync(newNode);
+            }
+        }
+    }
+    
+    private static string NormalizePath(string path)
+    {
+        return Path.GetFullPath(path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+    }
+
+    public void PrintTree(Node node, string indent = "")
+    {
+        Console.WriteLine($"{indent}- {Path.GetFileName(node.Address)} ");
         foreach (var child in node.Children)
         {
             PrintTree(child, indent + "  ");
