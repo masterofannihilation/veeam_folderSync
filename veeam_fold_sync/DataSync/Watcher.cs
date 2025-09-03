@@ -32,6 +32,7 @@ public class Watcher
 
     private void OnFileCreated(object sender, FileSystemEventArgs e)
     {
+        // Console.WriteLine("Created: " + e.FullPath);
         if (!AddedAddresses.Contains(e.FullPath))
             AddedAddresses.Add(e.FullPath);
     }
@@ -44,6 +45,7 @@ public class Watcher
 
     private void OnFileChanged(object sender, FileSystemEventArgs e)
     {
+        // Console.WriteLine("Changed: " + e.FullPath);
         if (!UpdatedAddresses.Contains(e.FullPath))
             UpdatedAddresses.Add(e.FullPath);
     }

@@ -23,10 +23,20 @@ public class Synchronizer(Options options, ILogger logger)
         
         await Task.WhenAll(buildTasks);
 
-        // Console.WriteLine("\n Source tree");
-        // _sourceTree.PrintTree(_sourceTree.Root);
-        // Console.WriteLine("\n Replica tree");
-        // _replicaTree.PrintTree(_replicaTree.Root);
+        Console.WriteLine("\n Source tree");
+        _sourceTree.PrintTree(_sourceTree.Root);
+        Console.WriteLine("");
+        foreach (var key  in _sourceTree.NodeLookup.Keys)
+        {
+            Console.WriteLine(key);
+        }
+        Console.WriteLine("\n Replica tree");
+        _replicaTree.PrintTree(_replicaTree.Root);
+        Console.WriteLine("");
+        foreach (var key  in _replicaTree.NodeLookup.Keys)
+        {
+            Console.WriteLine(key);
+        }
         
         // Start watching source folder and replica folder for changes
         _ = Task.Run( () => _sourceWatcher.Watch(options.SrcFolder));
@@ -46,13 +56,23 @@ public class Synchronizer(Options options, ILogger logger)
         await ProcessWatcherListAsync(_replicaWatcher.AddedAddresses, _replicaTree.AddNodes);
         await ProcessWatcherListAsync(_replicaWatcher.UpdatedAddresses, _replicaTree.UpdateNodes);
         
-        // Console.WriteLine("\n Source tree");
-        // _sourceTree.PrintTree(_sourceTree.Root);
-        // Console.WriteLine("\n Replica tree");
-        // _replicaTree.PrintTree(_replicaTree.Root);
-        
         // Sync source and replica trees
         await SyncTreesAsync(_sourceTree.Root, _replicaTree.Root);
+        
+        Console.WriteLine("\n Source tree");
+        _sourceTree.PrintTree(_sourceTree.Root);
+        Console.WriteLine("");
+        foreach (var key  in _sourceTree.NodeLookup.Keys)
+        {
+            Console.WriteLine(key);
+        }
+        Console.WriteLine("\n Replica tree");
+        _replicaTree.PrintTree(_replicaTree.Root);
+        Console.WriteLine("");
+        foreach (var key  in _replicaTree.NodeLookup.Keys)
+        {
+            Console.WriteLine(key);
+        }
     }
 
     private static async Task ProcessWatcherListAsync(List<string> addresses, Func<List<string>, Task> processFunc)
@@ -69,10 +89,12 @@ public class Synchronizer(Options options, ILogger logger)
     {
         // If root hashes match, trees are identical
         if (source.Hash == replica.Hash) return;
+        Console.WriteLine("Syncing");
 
         if (!source.IsDirectory) // File
         {
             await CopyFileAsync(source, replica.Address);
+            await _replicaTree.AddNodes([replica.Address]);
 
         }
         else // Directory
@@ -142,6 +164,7 @@ public class Synchronizer(Options options, ILogger logger)
         else
         {
             await CopyFileAsync(nodeToBeCopied, dstAddress);
+            await _replicaTree.AddNodes([dstAddress]);
         }
     }
 
@@ -156,7 +179,7 @@ public class Synchronizer(Options options, ILogger logger)
         // Explicitly flush and close before AddNodes to prevent accessing a file by another process
         await destStream.FlushAsync();
         destStream.Close();
-
+        
         logger.Log(LogLevel.Information, "Copied file: {FilePath}", nodeToBeCopied.Address + " to " + dstAddress);
     }
 
@@ -166,6 +189,7 @@ public class Synchronizer(Options options, ILogger logger)
         if (!Directory.Exists(dstAddress))
         {
             Directory.CreateDirectory(dstAddress);
+            await _replicaTree.AddNodes([dstAddress]);
             logger.Log(LogLevel.Information, "Created directory: {DirPath}", dstAddress);
         }
         // Recursively copy children
@@ -185,6 +209,7 @@ public class Synchronizer(Options options, ILogger logger)
         else
         {
             await DeleteFileAsync(nodeToBeDeleted);
+            await _replicaTree.RemoveNodes([nodeToBeDeleted.Address]);
         }
     }
 
@@ -204,6 +229,7 @@ public class Synchronizer(Options options, ILogger logger)
             await DeleteAsync(child);
         }
         Directory.Delete(nodeToBeDeleted.Address);
+        await _replicaTree.RemoveNodes([nodeToBeDeleted.Address]);
         logger.Log(LogLevel.Information, "Deleted directory (recursively): {DirPath}", nodeToBeDeleted.Address);
     }
     
