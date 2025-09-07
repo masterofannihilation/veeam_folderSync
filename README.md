@@ -1,4 +1,4 @@
-# Veeam FolderSync
+# Folder Synchroization Tool
 
 This app is a C#-based folder synchronization tool that uses Merkle trees to efficiently detect and synchronize changes between a source and a replica directory. It monitors both folders for file and directory changes using FileSystemWatcher and updates its internal tree structures. It periodically syncs the replica to match the source, logging all operations to a file and console.
 
