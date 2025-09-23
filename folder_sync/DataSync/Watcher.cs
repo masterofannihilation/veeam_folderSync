@@ -27,6 +27,7 @@ public class Watcher
 
     private void OnFileRenamed(object sender, RenamedEventArgs e)
     {
+        Console.WriteLine("Renamed: " + e.OldFullPath + " to " + e.FullPath);
         RenamedAddresses.Add(e.OldFullPath, e.FullPath);
     }
 
@@ -45,7 +46,7 @@ public class Watcher
 
     private void OnFileChanged(object sender, FileSystemEventArgs e)
     {
-        // Console.WriteLine("Changed: " + e.FullPath);
+        Console.WriteLine("Changed: " + e.FullPath);
         if (!UpdatedAddresses.Contains(e.FullPath))
             UpdatedAddresses.Add(e.FullPath);
     }

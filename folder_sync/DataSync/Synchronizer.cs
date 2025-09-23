@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.Logging;
+﻿using System.Diagnostics;
+using Microsoft.Extensions.Logging;
 using veeam_fold_sync.CliParser;
 
 namespace veeam_fold_sync.DataSync;
@@ -24,6 +25,8 @@ public class Synchronizer(Options options, ILogger logger)
         // Start watching source folder and replica folder for changes
         _ = Task.Run( () => _sourceWatcher.Watch(options.SrcFolder));
         _ = Task.Run( () => _replicaWatcher.Watch(options.RepFolder));
+
+        await DeleteExtraFiles();
         
         // Initial folder synchronization
         await SyncTreesAsync(_sourceTree.Root, _replicaTree.Root);
@@ -32,21 +35,128 @@ public class Synchronizer(Options options, ILogger logger)
     public async Task PeriodicSync()
     {
         // Update source tree and replica tree based on watcher changes
-        var updateTasks = new List<Task>();
-        updateTasks.Add(ProcessWatcherListAsync(_sourceWatcher.DeletedAddresses, _sourceTree.RemoveNode));
-        updateTasks.Add(ProcessWatcherListAsync(_sourceWatcher.AddedAddresses, _sourceTree.AddNode));
-        updateTasks.Add(ProcessWatcherListAsync(_sourceWatcher.UpdatedAddresses, _sourceTree.UpdateNode));
+        await ProcessWatcherListAsync(_replicaWatcher.RenamedAddresses, _replicaTree.UpdateNodeAddress);
+        await HandleRenamedAsync(_sourceWatcher.RenamedAddresses);
+        await DeleteExtraFiles(_replicaWatcher.RenamedAddresses);
         
-        updateTasks.Add(ProcessWatcherListAsync(_replicaWatcher.DeletedAddresses, _replicaTree.RemoveNode));
-        updateTasks.Add(ProcessWatcherListAsync(_replicaWatcher.AddedAddresses, _replicaTree.AddNode));
-        updateTasks.Add(ProcessWatcherListAsync(_replicaWatcher.UpdatedAddresses, _replicaTree.UpdateNode));
-        
+        var updateTasks = new List<Task>
+        {
+            ProcessWatcherListAsync(_sourceWatcher.DeletedAddresses, _sourceTree.RemoveNode),
+            ProcessWatcherListAsync(_sourceWatcher.AddedAddresses, _sourceTree.AddNode),
+            ProcessWatcherListAsync(_sourceWatcher.UpdatedAddresses, _sourceTree.UpdateNode),
+            
+            ProcessWatcherListAsync(_replicaWatcher.DeletedAddresses, _replicaTree.RemoveNode),
+            ProcessWatcherListAsync(_replicaWatcher.AddedAddresses, _replicaTree.AddNode),
+            ProcessWatcherListAsync(_replicaWatcher.UpdatedAddresses, _replicaTree.UpdateNode)
+        };
+
         await Task.WhenAll(updateTasks);
         
         // Sync source and replica trees
         await SyncTreesAsync(_sourceTree.Root, _replicaTree.Root);
         
         DebugPrint();
+    }
+    
+    
+
+    private async Task DeleteExtraFiles(Dictionary<string, string> addresses)
+    {
+        foreach (var addr in addresses)
+        {
+            var relativePath = Path.GetRelativePath(_replicaTree.Root.Address, addr.Value);
+            var sourcePath = Path.Combine(_sourceTree.Root.Address, relativePath);
+            if (File.Exists(addr.Value) && !File.Exists(sourcePath))
+            {
+                File.Delete(addr.Value);
+                logger.Log(LogLevel.Information, "Deleted extra file: {FilePath}", addr.Value);
+            }
+            else if (Directory.Exists(addr.Value) && !Directory.Exists(sourcePath))
+            {
+                Directory.Delete(addr.Value, true); // true for recursive delete
+                logger.Log(LogLevel.Information, "Deleted extra directory: {DirPath}", addr.Value);
+            }
+            
+        }
+    }
+
+    private async Task DeleteExtraFiles()
+    {
+        var replicaRoot = _replicaTree.Root.Address;
+        var sourceRoot = _sourceTree.Root.Address;
+
+        // Delete extra files
+        foreach (var file in Directory.EnumerateFiles(replicaRoot, "*", SearchOption.AllDirectories))
+        {
+            var relativePath = Path.GetRelativePath(replicaRoot, file);
+            var sourcePath = Path.Combine(sourceRoot, relativePath);
+            if (!File.Exists(sourcePath))
+            {
+                File.Delete(file);
+                logger.Log(LogLevel.Information, "Deleted extra file: {FilePath}", file);
+            }
+        }
+
+        // Delete extra directories (bottom-up)
+        var directories = Directory.EnumerateDirectories(replicaRoot, "*", SearchOption.AllDirectories)
+            .OrderByDescending(d => d.Length);
+        foreach (var dir in directories)
+        {
+            var relativePath = Path.GetRelativePath(replicaRoot, dir);
+            var sourcePath = Path.Combine(sourceRoot, relativePath);
+            if (!Directory.Exists(sourcePath))
+            {
+                Directory.Delete(dir, true);
+                logger.Log(LogLevel.Information, "Deleted extra directory: {DirPath}", dir);
+            }
+        }
+    }
+
+
+    private async Task HandleRenamedAsync(Dictionary<string, string> addressMap)
+    {
+        foreach (var oldAddr in addressMap.Keys)
+        {
+            var newAddr = addressMap[oldAddr];
+            // Rename in source tree
+            await _sourceTree.UpdateNodeAddress(oldAddr, newAddr);
+
+            // Get relative path from source root
+            var relativePath = Path.GetRelativePath(_sourceTree.Root.Address, newAddr);
+            var replicaOldAddr = Path.Combine(_replicaTree.Root.Address, Path.GetRelativePath(_sourceTree.Root.Address, oldAddr));
+            // Compute new path in replica
+            var replicaNewAddr = Path.Combine(_replicaTree.Root.Address, relativePath);
+
+            // Apply the rename in the replica tree
+            await _replicaTree.UpdateNodeAddress(replicaOldAddr, replicaNewAddr);
+            
+            DebugPrint();
+            // Physically rename in the filesystem
+            if (Directory.Exists(replicaOldAddr))
+            {
+                Directory.Move(replicaOldAddr, replicaNewAddr);
+                logger.Log(LogLevel.Information, "Renamed directory: {OldDirPath} to {NewDirPath}", replicaOldAddr, replicaNewAddr);
+            }
+            else if (File.Exists(replicaOldAddr))
+            {
+                File.Move(replicaOldAddr, replicaNewAddr);
+                logger.Log(LogLevel.Information, "Renamed file: {OldFilePath} to {NewFilePath}", replicaOldAddr, replicaNewAddr);
+            }
+            Console.WriteLine("Finished renaming in both trees.");
+        }
+    }
+
+    private static async Task ProcessWatcherListAsync(Dictionary<string, string> addresses, Func<string, string, Task> processFunc)
+    {
+        if (addresses.Count > 0)
+        {
+            // PrintAddresses(addresses);
+            foreach (var addr in addresses)
+            {
+                await processFunc(addr.Key, addr.Value);
+                
+            }
+        }
     }
 
     private static async Task ProcessWatcherListAsync(List<string> addresses, Func<string, Task> processFunc)
@@ -75,8 +185,6 @@ public class Synchronizer(Options options, ILogger logger)
         else // Directory
         {
             await SyncDirAsync(source, replica);
-            // After syncing, delete any extra files in replica that are not in source
-            await DeleteExtraFiles(source, replica);
         }
     }
     
@@ -147,33 +255,6 @@ public class Synchronizer(Options options, ILogger logger)
         }
 
         await Task.WhenAll(syncTasks);
-    }
-
-    private async Task DeleteExtraFiles(Node source, Node replica)
-    {
-        // Identify extra entries based on filesystem addresses to avoid hash comparison (empty files don't influence hash)
-        var sourceEntries = new HashSet<string>( Directory.GetFileSystemEntries(source.Address).Select(Path.GetFileName)!);
-        var replicaEntries = Directory.GetFileSystemEntries(replica.Address);
-    
-        // Find entries in replica that are not in source
-        var extraEntries = replicaEntries
-            .Where(entry => !sourceEntries.Contains(Path.GetFileName(entry)))
-            .ToList();
-    
-        // Delete extra entries
-        foreach (var extra in extraEntries)
-        {
-            if (Directory.Exists(extra))
-            {
-                await DeleteDirectoryAsync(_replicaTree.NodeLookup[NormalizePath(extra)]);
-                logger.Log(LogLevel.Information, "Deleted directory: {DirPath}", extra);
-            }
-            else if (File.Exists(extra))
-            {
-                File.Delete(extra);
-                logger.Log(LogLevel.Information, "Deleted file: {FilePath}", extra);
-            }
-        }
     }
 
     private async Task DeleteAsync(Node nodeToBeDeleted)

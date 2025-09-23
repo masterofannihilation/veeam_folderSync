@@ -110,6 +110,45 @@ public class MerkleTree(string rootPath)
         }
     }
     
+    public async Task UpdateNodeAddress(string oldAddr, string newAddr)
+    {
+        if (!NodeLookup.TryGetValue(NormalizePath(oldAddr), out var nodeToRename))
+            return;
+    
+        // Update node address
+        NodeLookup.Remove(NormalizePath(oldAddr));
+        nodeToRename.Address = NormalizePath(newAddr);
+        NodeLookup.Add(NormalizePath(newAddr), nodeToRename);
+    
+        // If it's a directory, update addresses of all descendants
+        if (nodeToRename.IsDirectory)
+        {
+            await UpdateChildAddresses(nodeToRename, oldAddr, newAddr);
+        }
+    }
+    
+    private async Task UpdateChildAddresses(Node parent, string oldBase, string newBase)
+    {
+        foreach (var child in parent.Children)
+        {
+            // Remove old address from lookup
+            NodeLookup.Remove(NormalizePath(child.Address));
+            
+            // Update address
+            var relativePath = Path.GetRelativePath(oldBase, child.Address);
+            child.Address = NormalizePath(Path.Combine(newBase, relativePath));
+    
+            // Add new address to lookup
+            NodeLookup.Add(NormalizePath(child.Address), child);
+    
+            // Recurse for directories
+            if (child.IsDirectory)
+            {
+                await UpdateChildAddresses(child, oldBase, newBase);
+            }
+        }
+    }
+    
     private static string NormalizePath(string path)
     {
         return Path.GetFullPath(path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
